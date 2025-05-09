@@ -13,6 +13,16 @@ import { loadChatModel } from "./utils.js";
 
 const DEFAULT_TIMEOUT = 60000; // 60 seconds
 
+// Helper function to validate state
+function validateState(state: any): state is typeof MessagesAnnotation.State {
+  return (
+    state &&
+    typeof state === "object" &&
+    "messages" in state &&
+    Array.isArray(state.messages)
+  );
+}
+
 // Helper function to check if a message indicates task completion
 function isTaskComplete(message: BaseMessage): boolean {
   const content = getMessageContent(message).toLowerCase();
@@ -51,6 +61,10 @@ function createModelCaller(agentType: "coordinator" | "hotel" | "taxi") {
     config: RunnableConfig
   ): Promise<typeof MessagesAnnotation.Update> {
     try {
+      if (!validateState(state)) {
+        throw new Error("Invalid state object");
+      }
+
       const configuration = ensureConfiguration(config);
       const agentConfig =
         configuration.agents[
@@ -119,15 +133,25 @@ function createModelCaller(agentType: "coordinator" | "hotel" | "taxi") {
 // Helper function to route model output
 function routeModelOutput(state: typeof MessagesAnnotation.State): string {
   try {
-    const messages = state.messages;
-    const lastMessage = messages[messages.length - 1];
+    if (!validateState(state)) {
+      console.error("Invalid state in routeModelOutput");
+      return "__end__";
+    }
 
-    // If the last message indicates task completion, end the conversation
+    const messages = state.messages;
+    if (!messages.length) {
+      return "__end__";
+    }
+
+    const lastMessage = messages[messages.length - 1];
+    if (!lastMessage) {
+      return "__end__";
+    }
+
     if (isTaskComplete(lastMessage)) {
       return "__end__";
     }
 
-    // If there are tool calls, route to tools
     if ((lastMessage as AIMessage)?.tool_calls?.length || 0 > 0) {
       return "tools";
     }
@@ -152,6 +176,10 @@ function getTextFromComplex(content: MessageContentComplex): string {
 // Helper function to get message content as string
 function getMessageContent(message: BaseMessage): string {
   try {
+    if (!message || !message.content) {
+      return "";
+    }
+
     if (typeof message.content === "string") {
       return message.content;
     }
@@ -209,7 +237,21 @@ const orchestratorWorkflow = new StateGraph(
   .addEdge("__start__", "coordinator")
   .addConditionalEdges("coordinator", (state) => {
     try {
-      const lastMessage = state.messages[state.messages.length - 1];
+      if (!validateState(state)) {
+        console.error("Invalid state in coordinator routing");
+        return "__end__";
+      }
+
+      const messages = state.messages;
+      if (!messages.length) {
+        return "__end__";
+      }
+
+      const lastMessage = messages[messages.length - 1];
+      if (!lastMessage) {
+        return "__end__";
+      }
+
       const content = getMessageContent(lastMessage).toLowerCase();
 
       // Route based on the coordinator's routing indication
